@@ -1,8 +1,10 @@
 package main
 
-import "sync"
-import "time"
-import "math/rand"
+import (
+	"math/rand"
+	"sync"
+	"time"
+)
 
 func main() {
 	rand.Seed(time.Now().UnixNano())

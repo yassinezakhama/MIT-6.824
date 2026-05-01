@@ -42,7 +42,7 @@ func connect() *rpc.Client {
 
 func get(key string) string {
 	client := connect()
-	args := GetArgs{ key }
+	args := GetArgs{key}
 	reply := GetReply{}
 	err := client.Call("KV.Get", &args, &reply)
 	if err != nil {
@@ -54,7 +54,7 @@ func get(key string) string {
 
 func put(key string, val string) {
 	client := connect()
-	args := PutArgs{ key, val }
+	args := PutArgs{key, val}
 	reply := PutReply{}
 	err := client.Call("KV.Put", &args, &reply)
 	if err != nil {

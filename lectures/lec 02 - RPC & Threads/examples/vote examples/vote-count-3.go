@@ -1,8 +1,10 @@
 package main
 
-import "sync"
-import "time"
-import "math/rand"
+import (
+	"math/rand"
+	"sync"
+	"time"
+)
 
 func main() {
 	rand.Seed(time.Now().UnixNano())
@@ -41,5 +43,5 @@ func main() {
 
 func requestVote() bool {
 	time.Sleep(time.Duration(rand.Intn(100)) * time.Millisecond)
-	return rand.Int() % 2 == 0
+	return rand.Int()%2 == 0
 }
