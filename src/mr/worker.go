@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/rpc"
 	"os"
+	"sort"
 	"time"
 )
 
@@ -27,7 +28,11 @@ func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string)
 		case Exit:
 			return
 		case Map:
+			handleMap(mapf, &args, &reply)
+			return
 		case Reduce:
+			handleReduce(reducef, &args, &reply)
+			return
 		case Wait:
 			time.Sleep(time.Second)
 		default:
@@ -38,6 +43,7 @@ func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string)
 
 func handleMap(mapf func(string, string) []KeyValue, _ *GetTaskArgs, reply *GetTaskReply) {
 	filename := reply.Filename
+	fmt.Println(reply)
 	file, err := os.Open(filename)
 	if err != nil {
 		log.Fatalf("cannot open %v", filename)
@@ -50,15 +56,15 @@ func handleMap(mapf func(string, string) []KeyValue, _ *GetTaskArgs, reply *GetT
 	}
 	_ = file.Close()
 
-	kva := mapf(filename, string(content))
+	intermediate := mapf(filename, string(content))
 
-	groupedkva := make([][]KeyValue, reply.NReduce)
-	for _, kv := range kva {
+	grouped := make([][]KeyValue, reply.NReduce)
+	for _, kv := range intermediate {
 		reduceID := ihash(kv.Key) % reply.NReduce
-		groupedkva[reduceID] = append(groupedkva[reduceID], kv)
+		grouped[reduceID] = append(grouped[reduceID], kv)
 	}
 
-	for reduceID, grouped := range groupedkva {
+	for reduceID, grouped := range grouped {
 		interfilename := fmt.Sprintf("mr-%v-%v", reply.ID, reduceID)
 		interfile, err := os.Create(interfilename)
 		if err != nil {
@@ -77,7 +83,74 @@ func handleMap(mapf func(string, string) []KeyValue, _ *GetTaskArgs, reply *GetT
 	}
 }
 
-func handleReduce(args *GetTaskArgs, reply *GetTaskReply) {}
+// for sorting by key.
+type byKey []KeyValue
+
+func (a byKey) Len() int           { return len(a) }
+func (a byKey) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+func (a byKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
+
+func handleReduce(reducef func(string, []string) string, args *GetTaskArgs, reply *GetTaskReply) {
+	reduceID := reply.ID
+
+	intermediate := []KeyValue{}
+
+	for m := 0; m < reply.NMap; m++ {
+		interfname := fmt.Sprintf("mr-%d-%d", m, reduceID)
+		interf, err := os.Open(interfname)
+		if err != nil {
+			log.Fatalf("cannot open %v", interfname)
+			// TODO: notify coordinator
+		}
+		dec := json.NewDecoder(interf)
+		for {
+			var kv KeyValue
+			if err := dec.Decode(&kv); err != nil {
+				break
+			}
+			intermediate = append(intermediate, kv)
+		}
+		interf.Close()
+	}
+
+	sort.Sort(byKey(intermediate))
+
+	ofilename := fmt.Sprintf("mr-out-%d", reduceID)
+	ofile, err := ioutil.TempFile(".", "temp-"+ofilename)
+	if err != nil {
+		log.Fatalf("cannot create an output file")
+		// TODO: notify coordinator
+	}
+	tmpname := ofile.Name()
+
+	i := 0
+	for i < len(intermediate) {
+		j := i + 1
+		for j < len(intermediate) && intermediate[j].Key == intermediate[i].Key {
+			j++
+		}
+		values := []string{}
+		for k := i; k < j; k++ {
+			values = append(values, intermediate[k].Value)
+		}
+		output := reducef(intermediate[i].Key, values)
+
+		if _, err := fmt.Fprintf(ofile, "%v %v\n", intermediate[i].Key, output); err != nil {
+			log.Fatalf("cannot write output")
+			// TODO: notify coordinator
+		}
+
+		i = j
+	}
+
+	ofile.Close()
+
+	err = os.Rename(tmpname, ofilename)
+	if err != nil {
+		log.Fatalf("cannot create an output file")
+		// TODO: notify coordinator
+	}
+}
 
 // send an RPC request to the coordinator, wait for the response.
 // usually returns true.

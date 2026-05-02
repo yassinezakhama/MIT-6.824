@@ -21,6 +21,7 @@ type GetTaskReply struct {
 	ID       int
 	Filename string
 	NReduce  int
+	NMap     int
 }
 
 // Cook up a unique-ish UNIX-domain socket name
