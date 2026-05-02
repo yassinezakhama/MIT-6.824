@@ -6,8 +6,6 @@ package main
 //
 // go run mrcoordinator.go pg*.txt
 //
-// Please do not change this file.
-//
 
 import (
 	"fmt"

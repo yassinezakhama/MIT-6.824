@@ -7,8 +7,6 @@ package main
 //
 // go run mrworker.go wc.so
 //
-// Please do not change this file.
-//
 
 import (
 	"fmt"

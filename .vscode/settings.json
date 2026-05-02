@@ -17,5 +17,6 @@
 
   "gopls": {
     "ui.diagnostic.staticcheck": true
-  }
+  },
+  "cSpell.words": ["ihash"]
 }
