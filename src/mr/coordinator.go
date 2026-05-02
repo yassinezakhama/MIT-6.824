@@ -18,8 +18,9 @@ const (
 )
 
 type mapTask struct {
-	fileName string
+	id       int
 	state    taskState
+	fileName string
 }
 
 type reduceTask struct {
@@ -38,15 +39,14 @@ type Coordinator struct {
 	nRemReduce  int
 }
 
-// MakeCoordinator creates a Coordinator.
-// nReduce is the number of reduce tasks to use.
 func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c := Coordinator{}
 
 	c.nRemMap = len(files)
 	c.mapTasks = make([]mapTask, len(files))
-	for idx, fname := range files {
-		c.mapTasks[idx] = mapTask{
+	for i, fname := range files {
+		c.mapTasks[i] = mapTask{
+			id:       i,
 			fileName: fname,
 			state:    idle,
 		}
@@ -66,7 +66,6 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	return &c
 }
 
-// Done is called by main/mrcoordinator.go periodically to find out if the entire job has finished.
 func (c *Coordinator) Done() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()

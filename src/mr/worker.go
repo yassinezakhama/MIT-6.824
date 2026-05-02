@@ -1,12 +1,14 @@
 package mr
 
 import (
+	"encoding/json"
 	"fmt"
 	"hash/fnv"
 	"io/ioutil"
 	"log"
 	"net/rpc"
 	"os"
+	"time"
 )
 
 type KeyValue struct {
@@ -16,8 +18,25 @@ type KeyValue struct {
 
 func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string) string) {
 	args, reply := GetTaskArgs{}, GetTaskReply{}
-	call("Coordinator.GetTask", &args, &reply)
+	for {
+		ok := call("Coordinator.GetTask", &args, &reply)
+		if !ok {
+			return
+		}
+		switch reply.Type {
+		case Exit:
+			return
+		case Map:
+		case Reduce:
+		case Wait:
+			time.Sleep(time.Second)
+		default:
+			panic(fmt.Sprintf("unexpected mr.TaskType: %#v", reply.Type))
+		}
+	}
+}
 
+func handleMap(mapf func(string, string) []KeyValue, _ *GetTaskArgs, reply *GetTaskReply) {
 	filename := reply.Filename
 	file, err := os.Open(filename)
 	if err != nil {
@@ -32,8 +51,33 @@ func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string)
 	_ = file.Close()
 
 	kva := mapf(filename, string(content))
-	fmt.Print(kva)
+
+	groupedkva := make([][]KeyValue, reply.NReduce)
+	for _, kv := range kva {
+		reduceID := ihash(kv.Key) % reply.NReduce
+		groupedkva[reduceID] = append(groupedkva[reduceID], kv)
+	}
+
+	for reduceID, grouped := range groupedkva {
+		interfilename := fmt.Sprintf("mr-%v-%v", reply.ID, reduceID)
+		interfile, err := os.Create(interfilename)
+		if err != nil {
+			log.Fatalf("cannot create intermediate file %v", interfilename)
+			// TODO: notify coordinator
+		}
+		enc := json.NewEncoder(interfile)
+		for _, kv := range grouped {
+			err = enc.Encode(&kv)
+			if err != nil {
+				log.Fatalf("cannot encode key/value pair %v", kv)
+				// TODO: notify coordinator
+			}
+		}
+		_ = interfile.Close()
+	}
 }
+
+func handleReduce(args *GetTaskArgs, reply *GetTaskReply) {}
 
 // send an RPC request to the coordinator, wait for the response.
 // usually returns true.

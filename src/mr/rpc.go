@@ -18,7 +18,9 @@ type GetTaskArgs struct{}
 
 type GetTaskReply struct {
 	Type     TaskType
+	ID       int
 	Filename string
+	NReduce  int
 }
 
 // Cook up a unique-ish UNIX-domain socket name
