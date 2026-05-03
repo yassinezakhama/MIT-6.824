@@ -18,11 +18,18 @@ type GetTaskArgs struct{}
 
 type GetTaskReply struct {
 	Type     TaskType
-	ID       int
+	TaskID   int
 	Filename string
 	NReduce  int
 	NMap     int
 }
+
+type ReportArgs struct {
+	TaskType TaskType
+	TaskID   int
+}
+
+type ReportReply struct{}
 
 // Cook up a unique-ish UNIX-domain socket name
 // in /var/tmp, for the coordinator.

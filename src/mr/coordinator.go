@@ -7,6 +7,7 @@ import (
 	"net/rpc"
 	"os"
 	"sync"
+	"time"
 )
 
 type taskState int
@@ -104,11 +105,75 @@ func (c *Coordinator) GetTask(args *GetTaskArgs, reply *GetTaskReply) error {
 	return nil
 }
 
-func (c *Coordinator) makeMapTask(args *GetTaskArgs, reply *GetTaskReply) {
+func (c *Coordinator) makeMapTask(_ *GetTaskArgs, reply *GetTaskReply) {
+	for i := range c.mapTasks {
+		if c.mapTasks[i].state != idle {
+			continue
+		}
+		c.mapTasks[i].state = inProgress
+		reply.Filename = c.mapTasks[i].fileName
+		reply.TaskID = i
+		reply.NReduce = c.nReduce
+		reply.Type = Map
+		go func(taskid int) {
+			time.Sleep(time.Second * 10)
 
+			c.mu.Lock()
+			defer c.mu.Unlock()
+			if c.mapTasks[taskid].state != done {
+				c.mapTasks[taskid].state = idle
+			}
+		}(i)
+		return
+	}
+	reply.Type = Wait
 }
 
-func (c *Coordinator) makeReduceTask(args *GetTaskArgs, reply *GetTaskReply) {
+func (c *Coordinator) makeReduceTask(_ *GetTaskArgs, reply *GetTaskReply) {
+	for i := range c.reduceTasks {
+		if c.reduceTasks[i].state != idle {
+			continue
+		}
+		c.reduceTasks[i].state = inProgress
+		reply.TaskID = i
+		reply.NMap = len(c.mapTasks)
+		reply.Type = Reduce
+		go func(taskid int) {
+			time.Sleep(time.Second * 10)
+
+			c.mu.Lock()
+			defer c.mu.Unlock()
+			if c.reduceTasks[taskid].state != done {
+				c.reduceTasks[taskid].state = idle
+			}
+		}(i)
+		return
+	}
+	reply.Type = Wait
+}
+
+func (c *Coordinator) Report(args *ReportArgs, _ *ReportReply) error {
+	taskid, tasktype := args.TaskID, args.TaskType
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	switch tasktype {
+	case Map:
+		if c.mapTasks[taskid].state == inProgress {
+			c.nRemMap--
+			c.mapTasks[taskid].state = done
+		}
+	case Reduce:
+		if c.reduceTasks[taskid].state == inProgress {
+			c.nRemReduce--
+			c.reduceTasks[taskid].state = done
+		}
+	default:
+		log.Fatalf("unexpected mr.TaskType: %#v", tasktype)
+	}
+
+	return nil
 }
 
 // start a thread that listens for RPCs from worker.go

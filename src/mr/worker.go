@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
+	"io"
 	"io/ioutil"
 	"log"
 	"net/rpc"
@@ -18,32 +19,40 @@ type KeyValue struct {
 }
 
 func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string) string) {
-	args, reply := GetTaskArgs{}, GetTaskReply{}
 	for {
-		ok := call("Coordinator.GetTask", &args, &reply)
-		if !ok {
+		args, reply := GetTaskArgs{}, GetTaskReply{}
+		if !call("Coordinator.GetTask", &args, &reply) {
 			return
 		}
+
 		switch reply.Type {
 		case Exit:
 			return
-		case Map:
-			handleMap(mapf, &args, &reply)
-			return
-		case Reduce:
-			handleReduce(reducef, &args, &reply)
-			return
+
 		case Wait:
 			time.Sleep(time.Second)
+
+		case Map:
+			if !handleMap(mapf, &args, &reply) {
+				return
+			}
+
+		case Reduce:
+			if !handleReduce(reducef, &args, &reply) {
+				return
+			}
+
 		default:
-			panic(fmt.Sprintf("unexpected mr.TaskType: %#v", reply.Type))
+			log.Fatalf("unexpected mr.TaskType: %#v", reply.Type)
+			// TODO: notify coordinator
 		}
 	}
 }
 
-func handleMap(mapf func(string, string) []KeyValue, _ *GetTaskArgs, reply *GetTaskReply) {
+func handleMap(
+	mapf func(string, string) []KeyValue,
+	_ *GetTaskArgs, reply *GetTaskReply) bool {
 	filename := reply.Filename
-	fmt.Println(reply)
 	file, err := os.Open(filename)
 	if err != nil {
 		log.Fatalf("cannot open %v", filename)
@@ -64,15 +73,16 @@ func handleMap(mapf func(string, string) []KeyValue, _ *GetTaskArgs, reply *GetT
 		grouped[reduceID] = append(grouped[reduceID], kv)
 	}
 
-	for reduceID, grouped := range grouped {
-		interfilename := fmt.Sprintf("mr-%v-%v", reply.ID, reduceID)
-		interfile, err := os.Create(interfilename)
+	for reduceID, bucket := range grouped {
+		interfile, err := ioutil.TempFile(".", "mr-tmp-*")
 		if err != nil {
-			log.Fatalf("cannot create intermediate file %v", interfilename)
+			log.Fatalf("cannot create intermediate file")
 			// TODO: notify coordinator
 		}
+		tmpname := interfile.Name()
+
 		enc := json.NewEncoder(interfile)
-		for _, kv := range grouped {
+		for _, kv := range bucket {
 			err = enc.Encode(&kv)
 			if err != nil {
 				log.Fatalf("cannot encode key/value pair %v", kv)
@@ -80,7 +90,20 @@ func handleMap(mapf func(string, string) []KeyValue, _ *GetTaskArgs, reply *GetT
 			}
 		}
 		_ = interfile.Close()
+		interfilename := fmt.Sprintf("mr-%v-%v", reply.TaskID, reduceID)
+		err = os.Rename(tmpname, interfilename)
+		if err != nil {
+			log.Fatalf("cannot create intermediate file")
+			// TODO: notify coordinator
+		}
 	}
+
+	reportargs := ReportArgs{
+		TaskID:   reply.TaskID,
+		TaskType: reply.Type,
+	}
+	reportreply := ReportReply{}
+	return call("Coordinator.Report", &reportargs, &reportreply)
 }
 
 // for sorting by key.
@@ -90,8 +113,10 @@ func (a byKey) Len() int           { return len(a) }
 func (a byKey) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
 func (a byKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
 
-func handleReduce(reducef func(string, []string) string, args *GetTaskArgs, reply *GetTaskReply) {
-	reduceID := reply.ID
+func handleReduce(
+	reducef func(string, []string) string,
+	_ *GetTaskArgs, reply *GetTaskReply) bool {
+	reduceID := reply.TaskID
 
 	intermediate := []KeyValue{}
 
@@ -106,7 +131,10 @@ func handleReduce(reducef func(string, []string) string, args *GetTaskArgs, repl
 		for {
 			var kv KeyValue
 			if err := dec.Decode(&kv); err != nil {
-				break
+				if err == io.EOF {
+					break
+				}
+				log.Fatalf("cannot decode key/value pair %v", kv)
 			}
 			intermediate = append(intermediate, kv)
 		}
@@ -115,8 +143,7 @@ func handleReduce(reducef func(string, []string) string, args *GetTaskArgs, repl
 
 	sort.Sort(byKey(intermediate))
 
-	ofilename := fmt.Sprintf("mr-out-%d", reduceID)
-	ofile, err := ioutil.TempFile(".", "temp-"+ofilename)
+	ofile, err := ioutil.TempFile(".", "temp-*")
 	if err != nil {
 		log.Fatalf("cannot create an output file")
 		// TODO: notify coordinator
@@ -145,11 +172,19 @@ func handleReduce(reducef func(string, []string) string, args *GetTaskArgs, repl
 
 	ofile.Close()
 
+	ofilename := fmt.Sprintf("mr-out-%d", reduceID)
 	err = os.Rename(tmpname, ofilename)
 	if err != nil {
 		log.Fatalf("cannot create an output file")
 		// TODO: notify coordinator
 	}
+
+	reportargs := ReportArgs{
+		TaskID:   reply.TaskID,
+		TaskType: reply.Type,
+	}
+	reportreply := ReportReply{}
+	return call("Coordinator.Report", &reportargs, &reportreply)
 }
 
 // send an RPC request to the coordinator, wait for the response.
